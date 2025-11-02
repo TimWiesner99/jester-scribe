@@ -1,0 +1,47 @@
+ <!--
+  Licensed under MIT
+  SPDX-License-Identifier: MIT
+  ESP8266 WiFi Setup with Captive Portal Example
+  © 2025 Lennart Gutjahr 
+ -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WiFi Setup</title>
+  <link rel="stylesheet" href="style.css" /> <!-- Link to CSS for styling -->
+</head>
+<body>
+  <main>
+    <header>
+      <h1>WiFi Setup</h1> <!-- Main heading -->
+      <h2>Connect your ESP8266 to a WiFi network</h2> <!-- Subheading -->
+    </header>
+
+    <form id="wifi-form">
+      <div>
+        <label for="ssid-select">WiFi Network</label>
+        <select id="ssid-select" name="ssid"></select> <!-- Dropdown for scanned SSIDs -->
+        <input type="text" id="ssid-manual" name="ssid-manual" placeholder="Enter SSID" style="display:none;margin-top:0.5rem;" /> <!-- Manual SSID input, hidden by default -->
+      </div>
+
+      <div>
+        <label for="password">Wi-Fi Password</label>
+        <input type="password" id="password" name="password" placeholder="Enter password" /> <!-- Password input -->
+      </div>
+
+      <button type="submit">Connect</button> <!-- Submit button -->
+    </form>
+
+    <div id="status"></div> <!-- Status messages shown here -->
+  </main>
+
+  <footer>
+    ESP8266 configures locally. No data is sent externally. <!-- Privacy notice -->
+  </footer>
+  <script src="script.js"></script> <!-- Link to JavaScript logic -->
+</body>
+</html>
+

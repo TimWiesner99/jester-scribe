@@ -1,0 +1,65 @@
+<!--
+  Licensed under MIT
+  SPDX-License-Identifier: MIT
+  ESP8266 Main Program Interface
+  © 2025 Lennart Gutjahr
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ESP8266 Control Panel</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1>ESP8266 Control Panel</h1>
+      <h2>Your device is connected and running</h2>
+    </header>
+
+    <div class="status-card">
+      <div class="status-label">WiFi Status</div>
+      <div class="status-value connected" id="wifi-status">Connected</div>
+    </div>
+
+    <div class="info-grid">
+      <div class="status-card">
+        <div class="status-label">Network SSID</div>
+        <div class="status-value" id="ssid">Loading...</div>
+      </div>
+      <div class="status-card">
+        <div class="status-label">IP Address</div>
+        <div class="status-value" id="ip-address">Loading...</div>
+      </div>
+    </div>
+
+    <div class="placeholder-notice">
+      <h3>Placeholder Page</h3>
+      <p>This is a placeholder interface. Replace this file (data/main.html) with your own custom interface for your ESP8266 project.</p>
+    </div>
+  </main>
+
+  <footer>
+    ESP8266 - Powered by Arduino
+  </footer>
+
+  <script>
+    // TODO: Add your JavaScript code here
+    // Example: Fetch device status, control GPIO pins, etc.
+
+    // Example placeholder function to load device info
+    async function loadDeviceInfo() {
+      // TODO: Replace with actual API calls to your ESP8266
+      // For now, this is just a placeholder
+      document.getElementById('ssid').textContent = 'N/A';
+      document.getElementById('ip-address').textContent = 'N/A';
+    }
+
+    // Load device info when page loads
+    window.addEventListener('DOMContentLoaded', loadDeviceInfo);
+  </script>
+</body>
+</html>
