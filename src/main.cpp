@@ -15,6 +15,11 @@ void setup() {
 
     // Connect to WiFi (may start captive portal if needed)
     if (wifiSetupConnect()) {
+        // Wait for WiFi subsystem to fully stabilize after mode transition
+        // This ensures clean transition from AP mode to STA mode
+        Serial.println("WiFi connected, waiting for subsystem to stabilize...");
+        delay(2000);
+
         // Start user program after successful WiFi connection
         userProgramSetup();
     }

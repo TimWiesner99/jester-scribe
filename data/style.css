@@ -96,7 +96,7 @@ label {
   margin-bottom: 0.1rem;
 }
 
-input, select {
+input, select, textarea {
   padding: 0.7rem 1rem;
   border: 1.5px solid var(--border);
   border-radius: 8px;
@@ -105,11 +105,17 @@ input, select {
   font-size: 1rem;
   transition: border 0.2s, background 0.2s;
   outline: none;
+  font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
 }
 
-input:focus, select:focus {
+input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   background: #2a2a2a;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 100px;
 }
 
 button {
@@ -194,6 +200,44 @@ footer {
   color: var(--accent-dark);
   font-size: 0.95rem;
   line-height: 1.5;
+}
+
+/* Character counter */
+#char-counter {
+  font-size: 0.85rem;
+  color: var(--accent-dark);
+  text-align: right;
+  margin-top: -0.5rem;
+}
+
+/* Thank you message */
+#thank-you {
+  color: var(--success);
+  font-weight: 600;
+  text-align: center;
+  margin-top: 1rem;
+  padding: 0.8rem;
+  background: rgba(72, 187, 120, 0.1);
+  border-radius: 8px;
+}
+
+/* Debug console */
+#debug-console {
+  margin-top: 1rem;
+  background: #000;
+  color: #4ade80;
+  padding: 1rem;
+  border-radius: 8px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+}
+
+#debug-output {
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 
 /* Animation for lifepath page */

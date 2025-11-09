@@ -3,7 +3,11 @@ function handleInput(el) {
   const counter = document.getElementById('char-counter');
   const remaining = 200 - el.value.length;
   counter.textContent = `${remaining} characters left`;
-  counter.classList.toggle('text-red-500', remaining <= 20);
+  if (remaining <= 20) {
+    counter.style.color = 'var(--warning)';
+  } else {
+    counter.style.color = 'var(--accent-dark)';
+  }
 }
 
 // Form submission handler
@@ -14,15 +18,30 @@ function handleSubmit(e) {
     method: 'POST',
     body: formData
   }).then(() => {
-    const form = document.getElementById('receipt-form');
+    const textarea = document.getElementById('message');
     const message = document.getElementById('thank-you');
-    form.classList.add('hidden');
-    message.classList.remove('hidden');
+
+    // Clear the textarea
+    textarea.value = '';
+
+    // Reset character counter
+    handleInput(textarea);
+
+    // Show thank you message temporarily
+    message.style.display = 'block';
+    setTimeout(() => {
+      message.style.display = 'none';
+    }, 3000);
+
+    // Show confetti
     confetti({
       particleCount: 100,
       spread: 70,
       origin: { y: 0.6 },
     });
+
+    // Refocus textarea for next message
+    textarea.focus();
   });
 }
 
@@ -38,8 +57,13 @@ function handleKeyPress(e) {
 function toggleDebug() {
   const console = document.getElementById('debug-console');
   const btn = document.getElementById('debug-toggle');
-  console.classList.toggle('hidden');
-  btn.textContent = console.classList.contains('hidden') ? '🔧 Debug' : '🔧 Hide';
+  if (console.style.display === 'none' || console.style.display === '') {
+    console.style.display = 'block';
+    btn.textContent = '🔧 Hide';
+  } else {
+    console.style.display = 'none';
+    btn.textContent = '🔧 Debug';
+  }
 }
 
 // Update debug logs from server

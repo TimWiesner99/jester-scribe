@@ -239,6 +239,7 @@ void printWrapped(String text) {
 
 // === Web Server Handlers ===
 void handleRoot(AsyncWebServerRequest *request) {
+  debugLog("Request received for / (root)");
   request->send(LittleFS, "/lifepath.html", "text/html");
 }
 
@@ -283,6 +284,7 @@ void handleLogs(AsyncWebServerRequest *request) {
 }
 
 void handle404(AsyncWebServerRequest *request) {
+  debugLog("404 - Request for unknown path: " + request->url());
   request->send(404, "text/plain", "Page not found");
 }
 
@@ -292,12 +294,44 @@ void userProgramSetup() {
   Serial.println("Main Program Starting...");
   Serial.println("=================================");
 
+  // Diagnostic: Check memory before starting
+  debugLog("Free heap at start: " + String(ESP.getFreeHeap()) + " bytes");
+
+  // Diagnostic: Verify LittleFS is accessible
+  debugLog("Checking LittleFS files...");
+  if (LittleFS.exists("/lifepath.html")) {
+    debugLog("  - lifepath.html: EXISTS");
+  } else {
+    debugLog("  - lifepath.html: MISSING!");
+  }
+  if (LittleFS.exists("/style.css")) {
+    debugLog("  - style.css: EXISTS");
+  } else {
+    debugLog("  - style.css: MISSING!");
+  }
+  if (LittleFS.exists("/lifepath.js")) {
+    debugLog("  - lifepath.js: EXISTS");
+  } else {
+    debugLog("  - lifepath.js: MISSING!");
+  }
+
+  // Diagnostic: Check WiFi state
+  debugLog("WiFi Status: " + String(WiFi.status()));
+  debugLog("WiFi Mode: " + String(WiFi.getMode()));
+  debugLog("Local IP: " + WiFi.localIP().toString());
+
   // Initialize printer
   initializePrinter();
+
+  // Diagnostic: Check memory after printer init
+  debugLog("Free heap after printer: " + String(ESP.getFreeHeap()) + " bytes");
 
   // Initialize time client
   timeClient.begin();
   debugLog("Time client initialized");
+
+  // Diagnostic: Check memory after NTP
+  debugLog("Free heap after NTP: " + String(ESP.getFreeHeap()) + " bytes");
 
   // Setup web server routes
   server.on("/", HTTP_GET, handleRoot);
@@ -306,16 +340,22 @@ void userProgramSetup() {
 
   // Serve static files from LittleFS
   server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
+    debugLog("Request received for /style.css");
     request->send(LittleFS, "/style.css", "text/css");
   });
   server.on("/lifepath.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    debugLog("Request received for /lifepath.js");
     request->send(LittleFS, "/lifepath.js", "application/javascript");
   });
 
   server.onNotFound(handle404);
 
+  debugLog("Starting web server...");
   server.begin();
   debugLog("Web server started on port 80");
+
+  // Diagnostic: Check memory after server start
+  debugLog("Free heap after server: " + String(ESP.getFreeHeap()) + " bytes");
 
   // Wait a bit longer before printing to ensure printer is fully ready
   debugLog("Waiting for printer to stabilize before printing startup info...");

@@ -5,13 +5,13 @@
 #include <ESP8266WiFi.h>
 
 // Configuration
-const char* ap_ssid = "ESP8266-WiFi-Setup";
+const char* ap_ssid = "Jester Scribe WiFi-Setup";
 const char* ap_password = "12345678";
 const char* CONFIG_FILE = "/config.json";
 const int wifiConnectionTimeout = 10000;
 
 // Internal state
-CaptivePortal portal;
+// Note: CaptivePortal is created locally when needed to avoid port conflicts
 String receivedSSID;
 String receivedPassword;
 String wifiList;
@@ -83,6 +83,37 @@ void waitForWiFiMode(WiFiMode_t targetMode, unsigned long timeoutMs = 2000) {
     }
 }
 
+// Verifies internet connectivity by attempting to resolve google.com via DNS
+// Returns true if internet is accessible, false otherwise
+bool verifyInternetConnectivity() {
+    Serial.println("Verifying internet connectivity...");
+
+    // Attempt to resolve google.com to an IP address
+    IPAddress resolvedIP;
+    if (WiFi.hostByName("google.com", resolvedIP)) {
+        Serial.print("Internet connectivity verified. google.com resolved to: ");
+        Serial.println(resolvedIP);
+        return true;
+    } else {
+        Serial.println("Internet connectivity check failed: Could not resolve google.com");
+        return false;
+    }
+}
+
+// Deletes the saved WiFi credentials file from LittleFS
+// This forces the device to launch the captive portal on next connection attempt
+void forgetCredentials() {
+    if (LittleFS.exists(CONFIG_FILE)) {
+        if (LittleFS.remove(CONFIG_FILE)) {
+            Serial.println("Saved WiFi credentials have been deleted");
+        } else {
+            Serial.println("Warning: Failed to delete credentials file");
+        }
+    } else {
+        Serial.println("No credentials file to delete");
+    }
+}
+
 // Attempts to connect to WiFi with the given credentials
 bool connectToWiFi(String ssid, String password) {
     Serial.println("Attempting to connect to WiFi...");
@@ -143,7 +174,8 @@ String createWifiJson() {
 }
 
 // Main loop for the Access Point (AP) mode
-void apLoop() {
+// Takes a reference to the CaptivePortal object
+void apLoop(CaptivePortal &portal) {
     while (!shouldStopAP) {
         portal.processDNS();
         delay(50);
@@ -167,7 +199,8 @@ bool paramCheck(String ssid, String password) {
 }
 
 // Sets up the ESP8266 as an open WiFi Access Point with a captive portal
-void apSetup() {
+// Takes a reference to the CaptivePortal object
+void apSetup(CaptivePortal &portal) {
     WiFi.mode(WIFI_AP);
     waitForWiFiMode(WIFI_AP);
 
@@ -198,7 +231,7 @@ void apSetup() {
 
     portal.startAP();
     Serial.println("Captive Portal started. Waiting for WiFi credentials...");
-    apLoop();
+    apLoop(portal);
 }
 
 // Public API functions
@@ -223,27 +256,73 @@ void wifiSetupInit() {
 
 bool wifiSetupConnect() {
     String savedSSID, savedPassword;
+
+    // Attempt to load and use saved credentials
     if (loadCredentials(savedSSID, savedPassword)) {
         Serial.println("Found saved WiFi credentials");
+
+        // Try to connect to the saved WiFi network
         if (connectToWiFi(savedSSID, savedPassword)) {
-            wifiConnected = true;
-            return true;
+            // WiFi connection established, now verify internet connectivity
+            // This catches cases where WiFi connects but router configuration has changed
+            // preventing actual internet access
+            if (verifyInternetConnectivity()) {
+                // Both WiFi and internet are working - success!
+                wifiConnected = true;
+                return true;
+            } else {
+                // WiFi connected but no internet access detected
+                // This likely means router configuration changed
+                Serial.println("WiFi connected but no internet access detected");
+                Serial.println("Router configuration may have changed");
+                Serial.println("Forgetting saved credentials and launching captive portal...");
+
+                // Disconnect from WiFi before forgetting credentials
+                WiFi.disconnect(true);
+                delay(1000);
+
+                // Delete the saved credentials so we don't get stuck in this state
+                forgetCredentials();
+            }
         } else {
-            Serial.println("Saved credentials failed, starting captive portal...");
+            // Failed to connect with saved credentials
+            Serial.println("Saved credentials failed to connect, starting captive portal...");
         }
     } else {
         Serial.println("No saved credentials found");
     }
 
+    // Launch captive portal for new WiFi setup
+    // This happens if: no saved credentials, connection failed, or internet check failed
     Serial.println("Starting captive portal for WiFi setup...");
-    apSetup();
+
+    // Create CaptivePortal locally to avoid port conflicts with user program's web server
+    // The portal and its internal AsyncWebServer will be destroyed when this function exits
+    CaptivePortal portal;
+    apSetup(portal);
 
     Serial.println("Credentials received from portal:");
     Serial.println("SSID: " + receivedSSID);
 
+    // Wait for captive portal to fully shut down and release resources
+    // This ensures the web server on port 80 is fully stopped before we try to connect
+    Serial.println("Waiting for captive portal to fully shut down...");
+    delay(2000);
+
+    // Attempt to connect with the newly provided credentials
     if (connectToWiFi(receivedSSID, receivedPassword)) {
-        wifiConnected = true;
-        return true;
+        // Verify internet connectivity for new credentials as well
+        if (verifyInternetConnectivity()) {
+            wifiConnected = true;
+            return true;
+        } else {
+            Serial.println("Connected to WiFi but no internet access detected");
+            Serial.println("Please check your router's internet connection");
+            Serial.println("Device will restart and try again...");
+            delay(5000);
+            ESP.restart();
+            return false;
+        }
     } else {
         Serial.println("Failed to connect with provided credentials");
         Serial.println("Device will restart and try captive portal again...");
