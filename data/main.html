@@ -1,65 +1,109 @@
-<!--
-  Licensed under MIT
-  SPDX-License-Identifier: MIT
-  ESP8266 Main Program Interface
-  © 2025 Lennart Gutjahr
--->
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ESP8266 Control Panel</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jester Scribe</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/main.js" defer></script>
 </head>
 <body>
   <main>
     <header>
-      <h1>ESP8266 Control Panel</h1>
-      <h2>Your device is connected and running</h2>
+      <h1>Jester Scribe</h1>
     </header>
 
-    <div class="status-card">
-      <div class="status-label">WiFi Status</div>
-      <div class="status-value connected" id="wifi-status">Connected</div>
+    <!-- Joy Emoji Button -->
+    <div class="joke-button-container">
+      <button id="joke-button" class="emoji-button" onclick="printDailyJoke()">😂</button>
+      <p class="button-label">Print Daily Joke</p>
     </div>
 
-    <div class="info-grid">
-      <div class="status-card">
-        <div class="status-label">Network SSID</div>
-        <div class="status-value" id="ssid">Loading...</div>
+    <!-- Custom Text Form -->
+    <form id="receipt-form" onsubmit="handleSubmit(event)" action="/submit" method="post">
+      <div>
+        <label for="message">Custom Message</label>
+        <textarea
+          id="message"
+          name="message"
+          maxlength="200"
+          oninput="handleInput(this)"
+          placeholder="Type your custom message…"
+          rows="4"
+          required
+        ></textarea>
+        <div id="char-counter">200 characters left</div>
       </div>
-      <div class="status-card">
-        <div class="status-label">IP Address</div>
-        <div class="status-value" id="ip-address">Loading...</div>
+      <button type="submit">Print Custom Message</button>
+    </form>
+
+    <div id="thank-you" style="display: none;">
+      Message submitted!
+    </div>
+
+    <!-- Settings Menu -->
+    <div class="menu-section">
+      <button class="menu-toggle" onclick="toggleSettings()">⚙️ Settings</button>
+      <div id="settings-menu" class="menu-content" style="display: none;">
+        <div class="settings-group">
+          <h3>Language</h3>
+          <select id="language-select">
+            <option value="en">English</option>
+            <option value="de">German</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+          </select>
+        </div>
+
+        <div class="settings-group">
+          <h3>Daily Print Time</h3>
+          <input type="time" id="print-time" value="09:00" />
+        </div>
+
+        <div class="settings-group">
+          <h3>Joke Categories</h3>
+          <label><input type="checkbox" value="programming" checked> Programming</label>
+          <label><input type="checkbox" value="general" checked> General</label>
+          <label><input type="checkbox" value="puns"> Puns</label>
+          <label><input type="checkbox" value="dark"> Dark Humor</label>
+        </div>
+
+        <div class="settings-group wifi-section">
+          <h3>WiFi Connection</h3>
+          <div class="wifi-info">
+            <p><strong>Network:</strong> <span id="wifi-ssid">Loading...</span></p>
+            <p><strong>IP Address:</strong> <span id="wifi-ip">Loading...</span></p>
+          </div>
+          <button class="danger-button" onclick="showForgetWifiModal()">Forget WiFi & Restart</button>
+        </div>
       </div>
     </div>
 
-    <div class="placeholder-notice">
-      <h3>Placeholder Page</h3>
-      <p>This is a placeholder interface. Replace this file (data/main.html) with your own custom interface for your ESP8266 project.</p>
+    <!-- Debug Console -->
+    <div class="menu-section">
+      <button class="menu-toggle" onclick="toggleDebug()">🔧 Debug</button>
+      <div id="debug-console" class="menu-content" style="display: none;">
+        <div>System Logs (auto-refresh)</div>
+        <pre id="debug-output">Loading...</pre>
+      </div>
     </div>
   </main>
 
+  <!-- Forget WiFi Confirmation Modal -->
+  <div id="forget-wifi-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <h2>⚠️ Warning</h2>
+      <p>This will forget the current WiFi credentials and restart the device.</p>
+      <p>You will need to manually reconnect to the device's captive portal and enter new WiFi credentials.</p>
+      <div class="modal-actions">
+        <button class="danger-button" onclick="confirmForgetWifi()">Confirm & Restart</button>
+        <button onclick="closeForgetWifiModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <footer>
-    ESP8266 - Powered by Arduino
+    Designed with love by <a href="https://urbancircles.club" target="_blank">Peter / Urban Circles</a>
   </footer>
-
-  <script>
-    // TODO: Add your JavaScript code here
-    // Example: Fetch device status, control GPIO pins, etc.
-
-    // Example placeholder function to load device info
-    async function loadDeviceInfo() {
-      // TODO: Replace with actual API calls to your ESP8266
-      // For now, this is just a placeholder
-      document.getElementById('ssid').textContent = 'N/A';
-      document.getElementById('ip-address').textContent = 'N/A';
-    }
-
-    // Load device info when page loads
-    window.addEventListener('DOMContentLoaded', loadDeviceInfo);
-  </script>
 </body>
 </html>

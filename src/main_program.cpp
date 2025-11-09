@@ -1,4 +1,4 @@
-#include "user_program.h"
+#include "main_program.h"
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
 #include <WiFiUdp.h>
@@ -172,6 +172,30 @@ void printReceipt() {
   debugLog("Receipt printed successfully");
 }
 
+// Placeholder function for printing daily jokes
+// This will be replaced with actual joke fetching logic later
+void printDailyJoke() {
+  debugLog("Printing daily joke (placeholder)...");
+
+  // Additional delay before print job
+  delay(200);
+
+  // Print header
+  setInverse(true);
+  printLine("DAILY JOKE");
+  setInverse(false);
+
+  delay(100);
+
+  // Print placeholder message
+  String placeholderText = "Jokes not implemented yet. Stay tuned for hilarious content!";
+  printWrapped(placeholderText);
+
+  advancePaper(2);
+
+  debugLog("Joke printed successfully");
+}
+
 void printServerInfo() {
   debugLog("=== Server Info ===");
   debugLog("Local IP: " + WiFi.localIP().toString());
@@ -240,7 +264,7 @@ void printWrapped(String text) {
 // === Web Server Handlers ===
 void handleRoot(AsyncWebServerRequest *request) {
   debugLog("Request received for / (root)");
-  request->send(LittleFS, "/lifepath.html", "text/html");
+  request->send(LittleFS, "/main.html", "text/html");
 }
 
 void handleSubmit(AsyncWebServerRequest *request) {
@@ -288,8 +312,49 @@ void handle404(AsyncWebServerRequest *request) {
   request->send(404, "text/plain", "Page not found");
 }
 
+// Handler for printing daily joke
+void handlePrintJoke(AsyncWebServerRequest *request) {
+  debugLog("Joke print requested via web interface");
+
+  // Queue the joke for printing in the main loop
+  // For now, print immediately
+  printDailyJoke();
+
+  request->send(200, "text/plain", "Joke print started!");
+}
+
+// Handler for WiFi info endpoint
+void handleWifiInfo(AsyncWebServerRequest *request) {
+  debugLog("WiFi info requested");
+
+  // Create JSON response with WiFi information
+  String json = "{";
+  json += "\"ssid\":\"" + WiFi.SSID() + "\",";
+  json += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
+  json += "}";
+
+  request->send(200, "application/json", json);
+}
+
+// Handler for forgetting WiFi credentials
+void handleForgetWifi(AsyncWebServerRequest *request) {
+  debugLog("WiFi forget requested - will restart device");
+
+  request->send(200, "text/plain", "Forgetting WiFi and restarting...");
+
+  // Delete the config file
+  if (LittleFS.exists("/config.json")) {
+    LittleFS.remove("/config.json");
+    debugLog("WiFi credentials deleted");
+  }
+
+  // Restart the device after a short delay
+  delay(1000);
+  ESP.restart();
+}
+
 // === Setup and Loop ===
-void userProgramSetup() {
+void mainProgramSetup() {
   Serial.println("=================================");
   Serial.println("Main Program Starting...");
   Serial.println("=================================");
@@ -299,20 +364,20 @@ void userProgramSetup() {
 
   // Diagnostic: Verify LittleFS is accessible
   debugLog("Checking LittleFS files...");
-  if (LittleFS.exists("/lifepath.html")) {
-    debugLog("  - lifepath.html: EXISTS");
+  if (LittleFS.exists("/main.html")) {
+    debugLog("  - main.html: EXISTS");
   } else {
-    debugLog("  - lifepath.html: MISSING!");
+    debugLog("  - main.html: MISSING!");
   }
   if (LittleFS.exists("/style.css")) {
     debugLog("  - style.css: EXISTS");
   } else {
     debugLog("  - style.css: MISSING!");
   }
-  if (LittleFS.exists("/lifepath.js")) {
-    debugLog("  - lifepath.js: EXISTS");
+  if (LittleFS.exists("/main.js")) {
+    debugLog("  - main.js: EXISTS");
   } else {
-    debugLog("  - lifepath.js: MISSING!");
+    debugLog("  - main.js: MISSING!");
   }
 
   // Diagnostic: Check WiFi state
@@ -337,15 +402,18 @@ void userProgramSetup() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/submit", HTTP_POST, handleSubmit);
   server.on("/logs", HTTP_GET, handleLogs);
+  server.on("/printJoke", HTTP_POST, handlePrintJoke);
+  server.on("/wifiInfo", HTTP_GET, handleWifiInfo);
+  server.on("/forgetWifi", HTTP_POST, handleForgetWifi);
 
   // Serve static files from LittleFS
   server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
     debugLog("Request received for /style.css");
     request->send(LittleFS, "/style.css", "text/css");
   });
-  server.on("/lifepath.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    debugLog("Request received for /lifepath.js");
-    request->send(LittleFS, "/lifepath.js", "application/javascript");
+  server.on("/main.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    debugLog("Request received for /main.js");
+    request->send(LittleFS, "/main.js", "application/javascript");
   });
 
   server.onNotFound(handle404);
@@ -367,7 +435,7 @@ void userProgramSetup() {
   debugLog("=== Setup Complete ===");
 }
 
-void userProgramLoop() {
+void mainProgramLoop() {
   // Update time client
   timeClient.update();
 

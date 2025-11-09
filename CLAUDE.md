@@ -104,8 +104,6 @@ The `data/` directory contains files uploaded to LittleFS:
 - `style.css`, `script.js` - Assets for web interfaces
 - `/config.json` - WiFi credentials (created at runtime by wifi_setup)
 
-Note: `firmware.ino` embeds its HTML in code as a raw string literal. This could be moved to `main.html` or kept embedded.
-
 ### Key Dependencies
 
 Current (platformio.ini):

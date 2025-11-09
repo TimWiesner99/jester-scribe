@@ -1,17 +1,18 @@
-#ifndef USER_PROGRAM_H
-#define USER_PROGRAM_H
+#ifndef MAIN_PROGRAM_H
+#define MAIN_PROGRAM_H
 
 #include <Arduino.h>
 
 // Initialize your main program
-void userProgramSetup();
+void mainProgramSetup();
 
 // Main program loop
-void userProgramLoop();
+void mainProgramLoop();
 
 // Thermal printer functions
 void initializePrinter();
 void printReceipt();
+void printDailyJoke();
 void printServerInfo();
 void setInverse(bool enable);
 void printLine(String line);

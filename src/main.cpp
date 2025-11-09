@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include "wifi_setup.h"
-#include "user_program.h"
+#include "main_program.h"
 
 void setup() {
     Serial.begin(115200);
@@ -21,7 +21,7 @@ void setup() {
         delay(2000);
 
         // Start user program after successful WiFi connection
-        userProgramSetup();
+        mainProgramSetup();
     }
 }
 
@@ -34,7 +34,7 @@ void loop() {
     }
 
     // Run user program loop
-    userProgramLoop();
+    mainProgramLoop();
 
     delay(100);
 }

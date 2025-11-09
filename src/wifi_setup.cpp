@@ -206,7 +206,7 @@ void apSetup(CaptivePortal &portal) {
 
     wifiList = createWifiJson();
 
-    portal.initializeOpen(ap_ssid, "index.html");
+    portal.initializeOpen(ap_ssid, "portal.html");
 
     portal.getServer().on("/api/setupWiFi", HTTP_POST, [&](AsyncWebServerRequest *request) {
         if (request->hasParam("ssid", true) && request->hasParam("password", true)) {
