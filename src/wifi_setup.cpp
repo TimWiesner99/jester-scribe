@@ -237,21 +237,8 @@ void apSetup(CaptivePortal &portal) {
 // Public API functions
 
 void wifiSetupInit() {
-    if (!LittleFS.begin()) {
-        Serial.println("Failed to mount LittleFS filesystem");
-        Serial.println("Formatting LittleFS...");
-        if (LittleFS.format()) {
-            Serial.println("LittleFS formatted successfully");
-            if (!LittleFS.begin()) {
-                Serial.println("Failed to mount LittleFS after formatting");
-                return;
-            }
-        } else {
-            Serial.println("Failed to format LittleFS");
-            return;
-        }
-    }
-    Serial.println("LittleFS mounted successfully");
+    // WiFi setup initialization - filesystem is managed by main.cpp
+    Serial.println("WiFi setup subsystem initialized");
 }
 
 bool wifiSetupConnect() {

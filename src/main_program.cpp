@@ -28,6 +28,15 @@ struct Receipt {
 
 Receipt currentReceipt = {"", "", false};
 
+// === Joke Request Structure ===
+struct JokeRequest {
+  bool shouldFetchAndPrint;  // Flag: should we fetch a joke and print it?
+  String jokeText;           // The joke text (empty = fetch from API)
+  bool hasData;              // Flag: do we have a joke ready to print?
+};
+
+JokeRequest currentJoke = {false, "", false};
+
 // === Debug Log Storage ===
 const int MAX_LOG_LINES = 50;
 String logBuffer[MAX_LOG_LINES];
@@ -172,10 +181,48 @@ void printReceipt() {
   debugLog("Receipt printed successfully");
 }
 
-// Placeholder function for printing daily jokes
-// This will be replaced with actual joke fetching logic later
-void printDailyJoke() {
-  debugLog("Printing daily joke (placeholder)...");
+// Function to fetch joke from API
+// This runs in main loop where blocking HTTP requests are safe
+String fetchJokeFromAPI() {
+  debugLog("Fetching joke from API...");
+
+  // TODO: Replace this placeholder with actual API call
+  // Example APIs:
+  // - https://official-joke-api.appspot.com/random_joke
+  // - https://icanhazdadjoke.com/ (set Accept: text/plain header)
+  // - https://v2.jokeapi.dev/joke/Any?type=single
+
+  // For now, return a placeholder
+  String placeholder = "API integration coming soon! This is a placeholder joke.";
+
+  debugLog("Joke fetched (placeholder)");
+  return placeholder;
+
+  /* Example implementation for when you're ready:
+
+  HTTPClient http;
+  http.begin("https://icanhazdadjoke.com/");
+  http.addHeader("Accept", "text/plain");
+
+  int httpCode = http.GET();
+  String joke = "";
+
+  if (httpCode == 200) {
+    joke = http.getString();
+    debugLog("Joke fetched successfully");
+  } else {
+    joke = "Failed to fetch joke. Error: " + String(httpCode);
+    debugLog("Failed to fetch joke");
+  }
+
+  http.end();
+  return joke;
+  */
+}
+
+// Function for printing jokes
+void printDailyJoke(String jokeText) {
+  debugLog("Printing joke...");
 
   // Additional delay before print job
   delay(200);
@@ -187,9 +234,8 @@ void printDailyJoke() {
 
   delay(100);
 
-  // Print placeholder message
-  String placeholderText = "Jokes not implemented yet. Stay tuned for hilarious content!";
-  printWrapped(placeholderText);
+  // Print the joke text
+  printWrapped(jokeText);
 
   advancePaper(2);
 
@@ -262,11 +308,6 @@ void printWrapped(String text) {
 }
 
 // === Web Server Handlers ===
-void handleRoot(AsyncWebServerRequest *request) {
-  debugLog("Request received for / (root)");
-  request->send(LittleFS, "/main.html", "text/html");
-}
-
 void handleSubmit(AsyncWebServerRequest *request) {
   if (request->hasParam("message", true)) {
     currentReceipt.message = request->getParam("message", true)->value();
@@ -316,11 +357,11 @@ void handle404(AsyncWebServerRequest *request) {
 void handlePrintJoke(AsyncWebServerRequest *request) {
   debugLog("Joke print requested via web interface");
 
-  // Queue the joke for printing in the main loop
-  // For now, print immediately
-  printDailyJoke();
+  // Queue the joke for fetching and printing in the main loop (async-safe)
+  currentJoke.shouldFetchAndPrint = true;
+  currentJoke.jokeText = "";  // Empty = will fetch from API in main loop
 
-  request->send(200, "text/plain", "Joke print started!");
+  request->send(200, "text/plain", "Joke will be fetched and printed!");
 }
 
 // Handler for WiFi info endpoint
@@ -362,24 +403,6 @@ void mainProgramSetup() {
   // Diagnostic: Check memory before starting
   debugLog("Free heap at start: " + String(ESP.getFreeHeap()) + " bytes");
 
-  // Diagnostic: Verify LittleFS is accessible
-  debugLog("Checking LittleFS files...");
-  if (LittleFS.exists("/main.html")) {
-    debugLog("  - main.html: EXISTS");
-  } else {
-    debugLog("  - main.html: MISSING!");
-  }
-  if (LittleFS.exists("/style.css")) {
-    debugLog("  - style.css: EXISTS");
-  } else {
-    debugLog("  - style.css: MISSING!");
-  }
-  if (LittleFS.exists("/main.js")) {
-    debugLog("  - main.js: EXISTS");
-  } else {
-    debugLog("  - main.js: MISSING!");
-  }
-
   // Diagnostic: Check WiFi state
   debugLog("WiFi Status: " + String(WiFi.status()));
   debugLog("WiFi Mode: " + String(WiFi.getMode()));
@@ -399,22 +422,14 @@ void mainProgramSetup() {
   debugLog("Free heap after NTP: " + String(ESP.getFreeHeap()) + " bytes");
 
   // Setup web server routes
-  server.on("/", HTTP_GET, handleRoot);
+  // Serve static files from LittleFS using serveStatic (more efficient)
+  server.serveStatic("/", LittleFS, "/").setDefaultFile("main.html");
+
   server.on("/submit", HTTP_POST, handleSubmit);
   server.on("/logs", HTTP_GET, handleLogs);
   server.on("/printJoke", HTTP_POST, handlePrintJoke);
   server.on("/wifiInfo", HTTP_GET, handleWifiInfo);
   server.on("/forgetWifi", HTTP_POST, handleForgetWifi);
-
-  // Serve static files from LittleFS
-  server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    debugLog("Request received for /style.css");
-    request->send(LittleFS, "/style.css", "text/css");
-  });
-  server.on("/main.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    debugLog("Request received for /main.js");
-    request->send(LittleFS, "/main.js", "application/javascript");
-  });
 
   server.onNotFound(handle404);
 
@@ -443,6 +458,22 @@ void mainProgramLoop() {
   if (currentReceipt.hasData) {
     printReceipt();
     currentReceipt.hasData = false; // Reset flag
+  }
+
+  // Check if a joke print was requested
+  if (currentJoke.shouldFetchAndPrint) {
+    // Fetch joke from API if no text provided
+    if (currentJoke.jokeText == "") {
+      currentJoke.jokeText = fetchJokeFromAPI();
+    }
+
+    // Print the joke
+    printDailyJoke(currentJoke.jokeText);
+
+    // Reset flags
+    currentJoke.shouldFetchAndPrint = false;
+    currentJoke.jokeText = "";
+    currentJoke.hasData = false;
   }
 
   delay(10); // Small delay to prevent excessive CPU usage
