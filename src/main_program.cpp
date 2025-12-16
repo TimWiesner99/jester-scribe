@@ -6,6 +6,7 @@
 #include <SoftwareSerial.h>
 #include <ESP8266WiFi.h>
 #include <LittleFS.h>
+#include <ArduinoJson.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
@@ -14,7 +15,9 @@
 const String JOKE_SOURCE = "https://www.hahaha.de/witze/witzdestages.txt";
 
 // === Time Configuration ===
-const long utcOffsetInSeconds = 0; // UTC offset in seconds (0 for UTC, 3600 for UTC+1, etc.)
+// Germany: UTC+1 (CET - Central European Time) = 3600 seconds
+// During daylight saving time (late March to late October): UTC+2 (CEST) = 7200 seconds
+const long utcOffsetInSeconds = 3600; // German standard time (UTC+1)
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds, 60000);
 
@@ -38,9 +41,19 @@ Receipt currentReceipt = {"", "", false};
 struct JokeRequest {
   bool shouldFetchAndPrint;  // Flag: should we fetch a joke and print it?
   bool readyToPrint;         // Flag: joke downloaded to filesystem, ready to print
+  bool isScheduled;          // Flag: true if auto-scheduled, false if manual
 };
 
-JokeRequest currentJoke = {false, false};
+JokeRequest currentJoke = {false, false, false};
+
+// === Schedule State ===
+struct ScheduleState {
+  String dailyPrintTime;        // e.g., "09:00"
+  String lastJokePrintDate;     // e.g., "2025-12-16"
+  unsigned long lastCheckMillis; // Throttle checks to once per minute
+};
+
+ScheduleState scheduleState = {"09:00", "", 0};
 
 // Joke cache file path
 const char* JOKE_CACHE_FILE = "/joke_cache.txt";
@@ -75,9 +88,9 @@ String getFormattedDateTime() {
   struct tm * timeInfo = gmtime(&rawTime);
 
   // Day names and month names
-  String dayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-  String monthNames[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  String dayNames[] = {"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"};
+  String monthNames[] = {"Januar", "Februar", "Maerz", "April", "Mai", "Juni",
+                        "Juli", "August", "September", "Okotber", "November", "Dezember"};
 
   // Format: "Sat, 06 Jun 2025"
   String formatted = dayNames[timeInfo->tm_wday] + ", ";
@@ -92,9 +105,9 @@ String formatCustomDate(String customDate) {
   // Expected format: YYYY-MM-DD or DD/MM/YYYY or similar
   // This function will try to parse common date formats and return formatted string
 
-  String dayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-  String monthNames[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  String dayNames[] = {"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"};
+  String monthNames[] = {"Januar", "Februar", "Maerz", "April", "Mai", "Juni",
+                        "Juli", "August", "September", "Okotber", "November", "Dezember"};
 
   int day = 0, month = 0, year = 0;
 
@@ -133,11 +146,169 @@ String formatCustomDate(String customDate) {
 
   // Format: "Sat, 06 Jun 2025"
   String formatted = dayNames[dayOfWeek] + ", ";
-  formatted += String(day < 10 ? "0" : "") + String(day) + " ";
+  formatted += String(day) + ". ";
   formatted += monthNames[month - 1] + " ";
   formatted += String(year);
 
   return formatted;
+}
+
+// Get current date in YYYY-MM-DD format
+String getCurrentDate() {
+  timeClient.update();
+  unsigned long epochTime = timeClient.getEpochTime();
+  time_t rawTime = epochTime;
+  struct tm * timeInfo = gmtime(&rawTime);
+
+  char buffer[11]; // "YYYY-MM-DD\0"
+  sprintf(buffer, "%04d-%02d-%02d",
+          timeInfo->tm_year + 1900,
+          timeInfo->tm_mon + 1,
+          timeInfo->tm_mday);
+  return String(buffer);
+}
+
+// Get current time in HH:MM format
+String getCurrentTime() {
+  timeClient.update();
+  unsigned long epochTime = timeClient.getEpochTime();
+  time_t rawTime = epochTime;
+  struct tm * timeInfo = gmtime(&rawTime);
+
+  char buffer[6]; // "HH:MM\0"
+  sprintf(buffer, "%02d:%02d",
+          timeInfo->tm_hour,
+          timeInfo->tm_min);
+  return String(buffer);
+}
+
+// === Schedule Configuration Functions ===
+// Load schedule settings from config.json
+bool loadScheduleConfig(String &dailyPrintTime, String &lastJokePrintDate) {
+  if (!LittleFS.exists("/config.json")) {
+    debugLog("Config file does not exist, using defaults");
+    dailyPrintTime = "09:00";
+    lastJokePrintDate = "";
+    return false;
+  }
+
+  File configFile = LittleFS.open("/config.json", "r");
+  if (!configFile) {
+    debugLog("Failed to open config file for reading");
+    dailyPrintTime = "09:00";
+    lastJokePrintDate = "";
+    return false;
+  }
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, configFile);
+  configFile.close();
+
+  if (error) {
+    debugLog("Failed to parse config file");
+    dailyPrintTime = "09:00";
+    lastJokePrintDate = "";
+    return false;
+  }
+
+  // Load with defaults if fields don't exist
+  dailyPrintTime = doc["dailyPrintTime"] | "09:00";
+  lastJokePrintDate = doc["lastJokePrintDate"] | "";
+
+  return true;
+}
+
+// Save complete schedule settings
+bool saveScheduleConfig(String dailyPrintTime, String lastJokePrintDate) {
+  // Load existing config to preserve WiFi credentials
+  JsonDocument doc;
+
+  if (LittleFS.exists("/config.json")) {
+    File configFile = LittleFS.open("/config.json", "r");
+    if (configFile) {
+      deserializeJson(doc, configFile);
+      configFile.close();
+    }
+  }
+
+  // Update schedule fields
+  doc["dailyPrintTime"] = dailyPrintTime;
+  doc["lastJokePrintDate"] = lastJokePrintDate;
+
+  // Save back to file
+  File configFile = LittleFS.open("/config.json", "w");
+  if (!configFile) {
+    debugLog("Failed to open config file for writing");
+    return false;
+  }
+
+  if (serializeJson(doc, configFile) == 0) {
+    debugLog("Failed to write to config file");
+    configFile.close();
+    return false;
+  }
+
+  configFile.close();
+  debugLog("Schedule config saved");
+  return true;
+}
+
+// Update only last print date (optimized for daily writes)
+bool updateLastPrintDate(String date) {
+  // Load existing config
+  JsonDocument doc;
+
+  if (LittleFS.exists("/config.json")) {
+    File configFile = LittleFS.open("/config.json", "r");
+    if (configFile) {
+      deserializeJson(doc, configFile);
+      configFile.close();
+    }
+  }
+
+  // Update only lastJokePrintDate field
+  doc["lastJokePrintDate"] = date;
+
+  // Save back to file
+  File configFile = LittleFS.open("/config.json", "w");
+  if (!configFile) {
+    debugLog("Failed to open config file for writing");
+    return false;
+  }
+
+  if (serializeJson(doc, configFile) == 0) {
+    debugLog("Failed to write to config file");
+    configFile.close();
+    return false;
+  }
+
+  configFile.close();
+  return true;
+}
+
+// === Scheduler Functions ===
+// Check if we should print scheduled joke
+bool shouldPrintScheduledJoke() {
+  // Throttle: only check once per 60 seconds
+  if (millis() - scheduleState.lastCheckMillis < 60000) {
+    return false;
+  }
+  scheduleState.lastCheckMillis = millis();
+
+  String currentDate = getCurrentDate();
+  String currentTime = getCurrentTime();
+
+  // Already printed today?
+  if (scheduleState.lastJokePrintDate == currentDate) {
+    return false;
+  }
+
+  // Past scheduled time?
+  if (currentTime >= scheduleState.dailyPrintTime) {
+    return true;
+  }
+
+  return false;
 }
 
 // === Printer Functions ===
@@ -170,7 +341,7 @@ void printReceipt() {
   debugLog("Printing receipt...");
 
   // Small delay to ensure printer is ready for new job
-  delay(200);
+  delay(1500);
 
   // Print header first (normal orientation)
   setInverse(true);
@@ -178,7 +349,7 @@ void printReceipt() {
   setInverse(false);
 
   // Small delay between header and message
-  delay(100);
+  delay(500);
 
   // Print wrapped message
   printWrapped(currentReceipt.message);
@@ -450,15 +621,17 @@ String processJokeFromFile() {
 void printDailyJoke(String jokeText) {
   debugLog("Printing joke...");
 
-  // Additional delay before print job
-  delay(200);
+  advancePaper(2);
+
+  // Small delay to ensure printer is ready for new job
+  delay(500);
 
   // Print header
   setInverse(true);
-  printLine("DAILY JOKE");
+  printLine(getFormattedDateTime());
   setInverse(false);
 
-  delay(100);
+  delay(1000);
 
   // Print the joke text
   printWrapped(jokeText);
@@ -477,18 +650,27 @@ void printServerInfo() {
   // Also print server info on the thermal printer
   debugLog("Printing server info on thermal printer...");
 
-  // Additional delay before first print job
-  delay(500);
+  // Additional 5s delay before first print job
+  delay(5000);
 
-  setInverse(true);
+  //setInverse(true);
   printLine("PRINTER SERVER READY");
-  setInverse(false);
+  //setInverse(false);
 
   // Delay between sections
-  delay(100);
+  delay(500);
 
   String serverInfo = "Server started at " + WiFi.localIP().toString();
   printWrapped(serverInfo);
+
+  // Print schedule information
+  delay(500);
+  printWrapped("Daily print: " + scheduleState.dailyPrintTime);
+  if (scheduleState.lastJokePrintDate.length() > 0) {
+    printWrapped("Last printed: " + scheduleState.lastJokePrintDate);
+  } else {
+    printWrapped("Last printed: Never");
+  }
 
   advancePaper(3);
 }
@@ -497,7 +679,7 @@ void printServerInfo() {
 void setInverse(bool enable) {
   printer.write(0x1D); printer.write('B');
   printer.write(enable ? 1 : 0); // GS B n
-  delay(50); // Small delay after mode change
+  delay(100); // Small delay after mode change
 }
 
 void printLine(String line) {
@@ -627,6 +809,11 @@ void mainProgramSetup() {
   // Initialize printer
   initializePrinter();
 
+  // Load schedule configuration
+  loadScheduleConfig(scheduleState.dailyPrintTime, scheduleState.lastJokePrintDate);
+  debugLog("Schedule loaded: time=" + scheduleState.dailyPrintTime +
+           ", lastPrint=" + scheduleState.lastJokePrintDate);
+
   // Initialize time client
   timeClient.begin();
   debugLog("Time client initialized");
@@ -640,6 +827,40 @@ void mainProgramSetup() {
   server.on("/printJoke", HTTP_POST, handlePrintJoke);
   server.on("/wifiInfo", HTTP_GET, handleWifiInfo);
   server.on("/forgetWifi", HTTP_POST, handleForgetWifi);
+
+  // Schedule API endpoints
+  server.on("/api/schedule", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String json = "{";
+    json += "\"dailyPrintTime\":\"" + scheduleState.dailyPrintTime + "\",";
+    json += "\"lastJokePrintDate\":\"" + scheduleState.lastJokePrintDate + "\"";
+    json += "}";
+    request->send(200, "application/json", json);
+  });
+
+  server.on("/api/schedule", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (request->hasParam("dailyPrintTime", true)) {
+      String newTime = request->getParam("dailyPrintTime", true)->value();
+
+      // Validate HH:MM format
+      if (newTime.length() == 5 && newTime.charAt(2) == ':') {
+        scheduleState.dailyPrintTime = newTime;
+        saveScheduleConfig(scheduleState.dailyPrintTime, scheduleState.lastJokePrintDate);
+        debugLog("Schedule time updated to: " + newTime);
+        request->send(200, "application/json", "{\"success\":true}");
+      } else {
+        request->send(400, "text/plain", "Invalid time format (use HH:MM)");
+      }
+    } else {
+      request->send(400, "text/plain", "Missing dailyPrintTime parameter");
+    }
+  });
+
+  server.on("/api/lastPrint", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String json = "{";
+    json += "\"lastJokePrintDate\":\"" + scheduleState.lastJokePrintDate + "\"";
+    json += "}";
+    request->send(200, "application/json", json);
+  });
 
   server.onNotFound(handle404);
 
@@ -664,6 +885,13 @@ void mainProgramLoop() {
   if (currentReceipt.hasData) {
     printReceipt();
     currentReceipt.hasData = false; // Reset flag
+  }
+
+  // Check scheduled printing (before manual joke check)
+  if (shouldPrintScheduledJoke()) {
+    debugLog("Scheduled joke print triggered at " + getCurrentTime());
+    currentJoke.shouldFetchAndPrint = true;
+    currentJoke.isScheduled = true;
   }
 
   // Check if a joke print was requested
@@ -692,6 +920,15 @@ void mainProgramLoop() {
 
     // Step 3: Print the joke
     printDailyJoke(jokeText);
+
+    // Track scheduled prints (update date only for automatic prints)
+    if (currentJoke.isScheduled) {
+      String currentDate = getCurrentDate();
+      updateLastPrintDate(currentDate);
+      scheduleState.lastJokePrintDate = currentDate;
+      debugLog("Updated lastJokePrintDate: " + currentDate);
+      currentJoke.isScheduled = false;
+    }
 
     // Reset flag
     currentJoke.readyToPrint = false;

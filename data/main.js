@@ -154,9 +154,60 @@ async function updateLogs() {
   }
 }
 
+// Load schedule settings on page load
+async function loadScheduleSettings() {
+  try {
+    const response = await fetch('/api/schedule');
+    const data = await response.json();
+    document.getElementById('print-time').value = data.dailyPrintTime;
+    updateLastPrintInfo(data.lastJokePrintDate);
+  } catch (error) {
+    console.error('Failed to load schedule:', error);
+  }
+}
+
+// Save print time when button clicked
+async function savePrintTime() {
+  const time = document.getElementById('print-time').value;
+  const formData = new FormData();
+  formData.append('dailyPrintTime', time);
+
+  try {
+    const response = await fetch('/api/schedule', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (response.ok) {
+      alert('Print time saved: ' + time);
+    } else {
+      alert('Failed to save time');
+    }
+  } catch (error) {
+    console.error('Error saving time:', error);
+    alert('Error saving time');
+  }
+}
+
+// Update last print info display
+function updateLastPrintInfo(lastDate) {
+  const elem = document.getElementById('last-print-info');
+  if (lastDate && lastDate.length > 0) {
+    const today = new Date().toISOString().split('T')[0];
+    if (lastDate === today) {
+      elem.textContent = 'Last printed: Today';
+    } else {
+      elem.textContent = 'Last printed: ' + lastDate;
+    }
+  } else {
+    elem.textContent = 'Last printed: Never';
+  }
+}
+
 // Auto-refresh logs every second
 setInterval(updateLogs, 1000);
 
 // Initial fetches
 setTimeout(updateLogs, 100);
 setTimeout(updateWifiInfo, 100);
+setTimeout(loadScheduleSettings, 100);

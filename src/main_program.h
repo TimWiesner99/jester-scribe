@@ -22,6 +22,14 @@ void printWrapped(String text);
 // Time utilities
 String getFormattedDateTime();
 String formatCustomDate(String customDate);
+String getCurrentDate();
+String getCurrentTime();
+
+// Schedule configuration
+bool loadScheduleConfig(String &dailyPrintTime, String &lastJokePrintDate);
+bool saveScheduleConfig(String dailyPrintTime, String lastJokePrintDate);
+bool updateLastPrintDate(String date);
+bool shouldPrintScheduledJoke();
 
 // Debug logging
 void debugLog(String message);
