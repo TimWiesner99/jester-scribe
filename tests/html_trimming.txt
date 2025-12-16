@@ -1,0 +1,10 @@
+html input:
+
+ <div id="witzdestages">
+Ein Blinder sitzt am Tresen in einer Bar und sagt zum Barkeeper: &quot;Hey, willst du einen Blondinenwitz h&ouml;ren?&quot;  In der Bar wird es pl&ouml;tzlich totenstill. Da sagt der Typ neben dem Blinden mit ruhiger Stimme: &quot;Es gibt etwas, das du wissen solltest, bevor du deinen Witz erz&auml;hlst! Der Barkeeper ist blond, der Rausschmei&szlig;er ist blond und ich bin 1,80 gro&szlig;, 100kg schwer, blond und habe den schwarzen G&uuml;rtel in Karate. Au&szlig;erdem ist der Typ neben mir 1,90 gro&szlig;, 120 kg schwer und ein blonder Gewichtheber. Der Typ zu deiner Rechten ist blond und zwei Meter gro&szlig;, 150 kg schwer und Wrestler. Jetzt denk noch mal ernsthaft dar&uuml;ber nach, ob du immer noch deinen Witz erz&auml;hlen willst.&quot; - &quot;N&ouml;&ouml;, keine Lust ihn f&uuml;nf Mal zu erkl&auml;ren!&quot;<br />
+  <span id="witzdestageslink"><a href="http://www.hahaha.de" title="Witze und Spr&uuml;che">HAHAHA.DE Witze Portal</a></span>
+ </div>
+
+
+desired output:
+Ein Blinder sitzt am Tresen in einer Bar und sagt zum Barkeeper: "Hey, willst du einen Blondinenwitz hören?" In der Bar wird es plötzlich totenstill. Da sagt der Typ neben dem Blinden mit ruhiger Stimme: "Es gibt etwas, das du wissen solltest, bevor du deinen Witz erzählst! Der Barkeeper ist blond, der Rausschmeißer ist blond und ich bin 1,80 groß, 100kg schwer, blond und habe den schwarzen Gürtel in Karate. Außerdem ist der Typ neben mir 1,90 groß, 120 kg schwer und ein blonder Gewichtheber. Der Typ zu deiner Rechten ist blond und zwei Meter groß, 150 kg schwer und Wrestler. Jetzt denk noch mal ernsthaft darüber nach, ob du immer noch deinen Witz erzählen willst." - "Nöö, keine Lust ihn fünf Mal zu erklären!" 

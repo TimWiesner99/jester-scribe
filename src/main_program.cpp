@@ -6,6 +6,12 @@
 #include <SoftwareSerial.h>
 #include <ESP8266WiFi.h>
 #include <LittleFS.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
+
+// === JOKE SOURCE ===
+const String JOKE_SOURCE = "https://www.hahaha.de/witze/witzdestages.txt";
 
 // === Time Configuration ===
 const long utcOffsetInSeconds = 0; // UTC offset in seconds (0 for UTC, 3600 for UTC+1, etc.)
@@ -31,11 +37,13 @@ Receipt currentReceipt = {"", "", false};
 // === Joke Request Structure ===
 struct JokeRequest {
   bool shouldFetchAndPrint;  // Flag: should we fetch a joke and print it?
-  String jokeText;           // The joke text (empty = fetch from API)
-  bool hasData;              // Flag: do we have a joke ready to print?
+  bool readyToPrint;         // Flag: joke downloaded to filesystem, ready to print
 };
 
-JokeRequest currentJoke = {false, "", false};
+JokeRequest currentJoke = {false, false};
+
+// Joke cache file path
+const char* JOKE_CACHE_FILE = "/joke_cache.txt";
 
 // === Debug Log Storage ===
 const int MAX_LOG_LINES = 50;
@@ -181,43 +189,261 @@ void printReceipt() {
   debugLog("Receipt printed successfully");
 }
 
-// Function to fetch joke from API
-// This runs in main loop where blocking HTTP requests are safe
-String fetchJokeFromAPI() {
-  debugLog("Fetching joke from API...");
+// Helper function to decode HTML entities (German characters)
+String decodeHTMLEntities(String text) {
+  // Common German HTML entities
+  text.replace("&quot;", "\"");
+  text.replace("&amp;", "&");
+  text.replace("&lt;", "<");
+  text.replace("&gt;", ">");
+  text.replace("&ouml;", "oe");
+  text.replace("&auml;", "ae");
+  text.replace("&uuml;", "ue");
+  text.replace("&Ouml;", "Oe");
+  text.replace("&Auml;", "Ae");
+  text.replace("&Uuml;", "Ue");
+  text.replace("&szlig;", "ss");
+  text.replace("&nbsp;", " ");
 
-  // TODO: Replace this placeholder with actual API call
-  // Example APIs:
-  // - https://official-joke-api.appspot.com/random_joke
-  // - https://icanhazdadjoke.com/ (set Accept: text/plain header)
-  // - https://v2.jokeapi.dev/joke/Any?type=single
+  return text;
+}
 
-  // For now, return a placeholder
-  String placeholder = "API integration coming soon! This is a placeholder joke.";
+// Helper function to remove HTML tags
+String stripHTMLTags(String text) {
+  String result = "";
+  bool inTag = false;
 
-  debugLog("Joke fetched (placeholder)");
-  return placeholder;
+  for (int i = 0; i < text.length(); i++) {
+    char c = text.charAt(i);
 
-  /* Example implementation for when you're ready:
-
-  HTTPClient http;
-  http.begin("https://icanhazdadjoke.com/");
-  http.addHeader("Accept", "text/plain");
-
-  int httpCode = http.GET();
-  String joke = "";
-
-  if (httpCode == 200) {
-    joke = http.getString();
-    debugLog("Joke fetched successfully");
-  } else {
-    joke = "Failed to fetch joke. Error: " + String(httpCode);
-    debugLog("Failed to fetch joke");
+    if (c == '<') {
+      inTag = true;
+      // Check if it's a <br> tag and convert to space
+      // Check bounds before substring
+      if (i + 4 <= text.length()) {
+        String tag = text.substring(i, i + 4);
+        if (tag.equals("<br>")) {
+          result += " ";
+        }
+      }
+      if (i + 5 <= text.length()) {
+        String tag = text.substring(i, i + 5);
+        if (tag.equals("<br/>")) {
+          result += " ";
+        }
+      }
+      // Also check for <br /> with space
+      if (i + 6 <= text.length()) {
+        String tag = text.substring(i, i + 6);
+        if (tag.equals("<br />")) {
+          result += " ";
+        }
+      }
+    } else if (c == '>') {
+      inTag = false;
+    } else if (!inTag) {
+      result += c;
+    }
   }
 
+  return result;
+}
+
+// Function to fetch joke from server and save to filesystem
+// Returns true if successful, false if failed
+// This runs in main loop where blocking HTTP requests are safe
+bool fetchJokeFromAPI() {
+  debugLog("Fetching joke from server...");
+
+  String jokeURL = JOKE_SOURCE;
+
+  // Use WiFiClientSecure for HTTPS connections
+  WiFiClientSecure client;
+  HTTPClient http;
+
+  // Skip certificate validation (insecure but necessary for simple ESP8266 HTTPS)
+  client.setInsecure();
+
+  // Reduce buffer sizes to save memory (default is 16KB each!)
+  // Current jokes are ~1KB, but allow room for variation (shorter or longer jokes)
+  // Using 2KB buffers (1KB RX + 1KB TX) instead of default 32KB (16KB each)
+  client.setBufferSizes(1024, 1024);  // RX and TX buffers: 1KB each (still saves 30KB!)
+
+  // Allow some time for any pending operations to complete and memory to be freed
+  delay(100);
+  yield();
+
+  // Begin HTTP connection
+  debugLog("Connecting to: " + jokeURL);
+  bool beginResult = http.begin(client, jokeURL);
+
+  if (!beginResult) {
+    debugLog("ERROR: http.begin() failed!");
+    http.end();
+    return false;
+  }
+  debugLog("HTTP connection initialized");
+
+  // Set timeout (10 seconds for HTTPS - can be slower)
+  http.setTimeout(10000);
+
+  // Add headers that the server expects (some servers reject requests without these)
+  http.addHeader("User-Agent", "Mozilla/5.0 (ESP8266)");
+  http.addHeader("Accept", "text/plain, text/html, */*");
+  http.addHeader("Connection", "close");
+
+  // Make GET request
+  int httpCode = http.GET();
+  debugLog("HTTP response code: " + String(httpCode));
+
+  bool success = false;
+
+  if (httpCode == HTTP_CODE_OK) {  // 200
+    debugLog("HTTP 200 OK - Streaming to file...");
+
+    // Check content length
+    int contentLength = http.getSize();
+    if (contentLength > 0) {
+      debugLog("Content size: " + String(contentLength) + " bytes");
+    } else {
+      debugLog("Content size: Unknown (chunked transfer)");
+    }
+
+    // Open file for writing (this will overwrite any existing file)
+    File file = LittleFS.open(JOKE_CACHE_FILE, "w");
+    if (!file) {
+      debugLog("ERROR: Failed to open file for writing!");
+      http.end();
+      return false;
+    }
+
+    // Stream the response directly to file in chunks (saves memory!)
+    WiFiClient* stream = http.getStreamPtr();
+    int bytesWritten = 0;
+    uint8_t buffer[128]; // Small buffer - only 128 bytes in RAM at a time
+    const int MAX_FILE_SIZE = 5000; // Safety limit: max 5KB (jokes should be < 2KB)
+
+    while (http.connected() && (contentLength > 0 || contentLength == -1)) {
+      // Safety check: prevent downloading huge files
+      if (bytesWritten >= MAX_FILE_SIZE) {
+        debugLog("WARNING: File size exceeded " + String(MAX_FILE_SIZE) + " bytes, stopping download");
+        break;
+      }
+      size_t availableSize = stream->available();
+
+      if (availableSize) {
+        // Read chunk into buffer
+        int bytesToRead = ((availableSize > sizeof(buffer)) ? sizeof(buffer) : availableSize);
+        int bytesRead = stream->readBytes(buffer, bytesToRead);
+
+        // Write chunk to file
+        file.write(buffer, bytesRead);
+        bytesWritten += bytesRead;
+
+        if (contentLength > 0) {
+          contentLength -= bytesRead;
+        }
+
+        // Yield to allow ESP8266 to handle background tasks
+        yield();
+      }
+      delay(1);
+    }
+
+    file.close();
+    debugLog("Downloaded " + String(bytesWritten) + " bytes to file");
+
+    success = true;
+
+  } else if (httpCode > 0) {
+    // HTTP error code
+    debugLog("HTTP request failed with code: " + String(httpCode));
+  } else {
+    // Connection failed
+    debugLog("HTTP connection failed: " + http.errorToString(httpCode));
+  }
+
+  // Close HTTP connection to free memory ASAP
   http.end();
+
+  return success;
+}
+
+// Function to process cached joke file and extract clean text
+// Returns the joke text, or error message if processing failed
+String processJokeFromFile() {
+  debugLog("Processing joke from file...");
+
+  // Read the entire file into a String
+  // File is small (~1000 bytes) so this is safe after closing HTTP connection
+  File file = LittleFS.open(JOKE_CACHE_FILE, "r");
+  if (!file) {
+    debugLog("ERROR: Failed to open joke cache file for reading!");
+    return "Error: Could not read joke cache";
+  }
+
+  String htmlContent = file.readString();
+  file.close();
+
+  debugLog("Read " + String(htmlContent.length()) + " chars from file");
+
+  String joke = "";
+
+  // Extract content from <div id="witzdestages">
+  int divStart = htmlContent.indexOf("<div id=\"witzdestages\">");
+  if (divStart == -1) {
+    divStart = htmlContent.indexOf("<div id='witzdestages'>");
+  }
+
+  if (divStart != -1) {
+    // Find the closing </div>
+    int divEnd = htmlContent.indexOf("</div>", divStart);
+
+    if (divEnd != -1) {
+      // Extract content between tags
+      joke = htmlContent.substring(divStart, divEnd);
+
+      // Remove the opening div tag
+      int contentStart = joke.indexOf(">") + 1;
+      joke = joke.substring(contentStart);
+
+      // Remove the footer link span (if present)
+      int linkStart = joke.indexOf("<span id=\"witzdestageslink\">");
+      if (linkStart == -1) {
+        linkStart = joke.indexOf("<span id='witzdestageslink'>");
+      }
+      if (linkStart != -1) {
+        joke = joke.substring(0, linkStart);
+      }
+
+      // Decode HTML entities (ö, ä, ü, ß, etc.)
+      joke = decodeHTMLEntities(joke);
+
+      // Remove remaining HTML tags (<br />, etc.)
+      joke = stripHTMLTags(joke);
+
+      // Clean up whitespace
+      joke.trim();
+
+      // Replace multiple spaces with single space
+      while (joke.indexOf("  ") != -1) {
+        joke.replace("  ", " ");
+      }
+
+      debugLog("Final joke: " + String(joke.length()) + " chars");
+
+      if (joke.length() == 0) {
+        return "Error: Joke extraction resulted in empty text";
+      }
+
+    } else {
+      return "Error: Could not find closing div tag";
+    }
+  } else {
+    return "Error: Could not find witzdestages div";
+  }
+
   return joke;
-  */
 }
 
 // Function for printing jokes
@@ -349,7 +575,6 @@ void handleLogs(AsyncWebServerRequest *request) {
 }
 
 void handle404(AsyncWebServerRequest *request) {
-  debugLog("404 - Request for unknown path: " + request->url());
   request->send(404, "text/plain", "Page not found");
 }
 
@@ -359,7 +584,6 @@ void handlePrintJoke(AsyncWebServerRequest *request) {
 
   // Queue the joke for fetching and printing in the main loop (async-safe)
   currentJoke.shouldFetchAndPrint = true;
-  currentJoke.jokeText = "";  // Empty = will fetch from API in main loop
 
   request->send(200, "text/plain", "Joke will be fetched and printed!");
 }
@@ -400,26 +624,12 @@ void mainProgramSetup() {
   Serial.println("Main Program Starting...");
   Serial.println("=================================");
 
-  // Diagnostic: Check memory before starting
-  debugLog("Free heap at start: " + String(ESP.getFreeHeap()) + " bytes");
-
-  // Diagnostic: Check WiFi state
-  debugLog("WiFi Status: " + String(WiFi.status()));
-  debugLog("WiFi Mode: " + String(WiFi.getMode()));
-  debugLog("Local IP: " + WiFi.localIP().toString());
-
   // Initialize printer
   initializePrinter();
-
-  // Diagnostic: Check memory after printer init
-  debugLog("Free heap after printer: " + String(ESP.getFreeHeap()) + " bytes");
 
   // Initialize time client
   timeClient.begin();
   debugLog("Time client initialized");
-
-  // Diagnostic: Check memory after NTP
-  debugLog("Free heap after NTP: " + String(ESP.getFreeHeap()) + " bytes");
 
   // Setup web server routes
   // Serve static files from LittleFS using serveStatic (more efficient)
@@ -437,11 +647,7 @@ void mainProgramSetup() {
   server.begin();
   debugLog("Web server started on port 80");
 
-  // Diagnostic: Check memory after server start
-  debugLog("Free heap after server: " + String(ESP.getFreeHeap()) + " bytes");
-
   // Wait a bit longer before printing to ensure printer is fully ready
-  debugLog("Waiting for printer to stabilize before printing startup info...");
   delay(2000); // Additional 2 second delay before first print
 
   // Print server info
@@ -462,18 +668,33 @@ void mainProgramLoop() {
 
   // Check if a joke print was requested
   if (currentJoke.shouldFetchAndPrint) {
-    // Fetch joke from API if no text provided
-    if (currentJoke.jokeText == "") {
-      currentJoke.jokeText = fetchJokeFromAPI();
+    // Step 1: Fetch joke from API and save to filesystem
+    debugLog("Starting joke fetch...");
+    bool fetchSuccess = fetchJokeFromAPI();
+
+    if (fetchSuccess) {
+      // HTTP connection is now closed, memory freed
+      currentJoke.shouldFetchAndPrint = false;
+      currentJoke.readyToPrint = true;
+    } else {
+      debugLog("ERROR: Failed to fetch joke");
+      printDailyJoke("Error: Could not fetch joke from server");
+      currentJoke.shouldFetchAndPrint = false;
+      currentJoke.readyToPrint = false;
     }
+  }
 
-    // Print the joke
-    printDailyJoke(currentJoke.jokeText);
+  // Check if joke is ready to process and print
+  if (currentJoke.readyToPrint) {
+    // Step 2: Process joke from file (parse HTML, decode entities, etc.)
+    debugLog("Processing joke from cache...");
+    String jokeText = processJokeFromFile();
 
-    // Reset flags
-    currentJoke.shouldFetchAndPrint = false;
-    currentJoke.jokeText = "";
-    currentJoke.hasData = false;
+    // Step 3: Print the joke
+    printDailyJoke(jokeText);
+
+    // Reset flag
+    currentJoke.readyToPrint = false;
   }
 
   delay(10); // Small delay to prevent excessive CPU usage
