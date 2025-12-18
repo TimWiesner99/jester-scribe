@@ -1,4 +1,5 @@
 #include "main_program.h"
+#include "wifi_setup.h"
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
 #include <WiFiUdp.h>
@@ -39,12 +40,20 @@ Receipt currentReceipt = {"", "", false};
 
 // === Joke Request Structure ===
 struct JokeRequest {
-  bool shouldFetchAndPrint;  // Flag: should we fetch a joke and print it?
-  bool readyToPrint;         // Flag: joke downloaded to filesystem, ready to print
-  bool isScheduled;          // Flag: true if auto-scheduled, false if manual
+  bool shouldPrint;    // Flag: should we print a joke?
+  bool isScheduled;    // Flag: true if auto-scheduled, false if manual
 };
 
-JokeRequest currentJoke = {false, false, false};
+JokeRequest currentJoke = {false, false};
+
+// === Error Tracking Structure ===
+struct JokeError {
+  int lastHttpCode;              // Last HTTP response code (-1 if connection failed)
+  bool hasInternetConnectivity;  // Result of google.com ping
+  String errorType;              // "HTTP_ERROR", "CONNECTION_FAILED", "PROCESSING_FAILED", "FILE_IO_ERROR"
+  int attemptNumber;             // Which attempt failed
+  String detailedMessage;        // Human-readable error description
+};
 
 // === Schedule State ===
 struct ScheduleState {
@@ -55,8 +64,9 @@ struct ScheduleState {
 
 ScheduleState scheduleState = {"09:00", "", 0};
 
-// Joke cache file path
-const char* JOKE_CACHE_FILE = "/joke_cache.txt";
+// Joke cache file paths
+const char* JOKE_CACHE_FILE = "/joke_cache.txt";     // Temp HTML (deleted after processing)
+const char* JOKE_CACHE_JSON = "/joke_cache.json";    // Processed cache (persistent)
 
 // === Debug Log Storage ===
 const int MAX_LOG_LINES = 50;
@@ -420,10 +430,54 @@ String stripHTMLTags(String text) {
   return result;
 }
 
+// === Error Message Builder ===
+// Builds detailed error message for thermal printer
+String buildErrorMessage(const JokeError &error) {
+  String message = "=== JOKE FETCH ERROR ===\n\n";
+
+  message += "Failed after " + String(error.attemptNumber) + " attempts\n\n";
+
+  // HTTP code information
+  if (error.lastHttpCode > 0) {
+    message += "HTTP Code: " + String(error.lastHttpCode);
+
+    // Add human-readable description
+    if (error.lastHttpCode == 404) {
+      message += " (Not Found)";
+    } else if (error.lastHttpCode == 500) {
+      message += " (Server Error)";
+    } else if (error.lastHttpCode == 503) {
+      message += " (Unavailable)";
+    } else if (error.lastHttpCode >= 400 && error.lastHttpCode < 500) {
+      message += " (Client Error)";
+    } else if (error.lastHttpCode >= 500) {
+      message += " (Server Error)";
+    }
+    message += "\n\n";
+  } else if (error.lastHttpCode == -1) {
+    message += "Connection failed\n\n";
+  }
+
+  // Internet connectivity status
+  if (!error.hasInternetConnectivity) {
+    message += "WARNING: No internet\nconnection detected\n(google.com unreachable)\n\n";
+  }
+
+  // Error type
+  message += "Error Type:\n" + error.errorType + "\n\n";
+
+  // Detailed message if available
+  if (error.detailedMessage.length() > 0) {
+    message += error.detailedMessage;
+  }
+
+  return message;
+}
+
 // Function to fetch joke from server and save to filesystem
 // Returns true if successful, false if failed
 // This runs in main loop where blocking HTTP requests are safe
-bool fetchJokeFromAPI() {
+bool fetchJokeFromAPI(JokeError &error) {
   debugLog("Fetching joke from server...");
 
   String jokeURL = JOKE_SOURCE;
@@ -450,6 +504,9 @@ bool fetchJokeFromAPI() {
 
   if (!beginResult) {
     debugLog("ERROR: http.begin() failed!");
+    error.lastHttpCode = -1;
+    error.errorType = "CONNECTION_FAILED";
+    error.detailedMessage = "HTTP client initialization failed";
     http.end();
     return false;
   }
@@ -465,6 +522,7 @@ bool fetchJokeFromAPI() {
 
   // Make GET request
   int httpCode = http.GET();
+  error.lastHttpCode = httpCode; // Capture HTTP code
   debugLog("HTTP response code: " + String(httpCode));
 
   bool success = false;
@@ -484,6 +542,8 @@ bool fetchJokeFromAPI() {
     File file = LittleFS.open(JOKE_CACHE_FILE, "w");
     if (!file) {
       debugLog("ERROR: Failed to open file for writing!");
+      error.errorType = "FILE_IO_ERROR";
+      error.detailedMessage = "Cannot open cache file for writing";
       http.end();
       return false;
     }
@@ -527,11 +587,25 @@ bool fetchJokeFromAPI() {
     success = true;
 
   } else if (httpCode > 0) {
-    // HTTP error code
+    // HTTP error code (4xx, 5xx)
     debugLog("HTTP request failed with code: " + String(httpCode));
+    error.errorType = "HTTP_ERROR";
+    if (httpCode == 404) {
+      error.detailedMessage = "Joke source not found (404)";
+    } else if (httpCode == 503) {
+      error.detailedMessage = "Server temporarily unavailable (503)";
+    } else if (httpCode >= 500) {
+      error.detailedMessage = "Server error (" + String(httpCode) + ")";
+    } else if (httpCode >= 400) {
+      error.detailedMessage = "Client error (" + String(httpCode) + ")";
+    } else {
+      error.detailedMessage = "Unexpected HTTP code: " + String(httpCode);
+    }
   } else {
-    // Connection failed
+    // Connection failed (negative error code)
     debugLog("HTTP connection failed: " + http.errorToString(httpCode));
+    error.errorType = "CONNECTION_FAILED";
+    error.detailedMessage = "Connection error: " + http.errorToString(httpCode);
   }
 
   // Close HTTP connection to free memory ASAP
@@ -617,6 +691,164 @@ String processJokeFromFile() {
   return joke;
 }
 
+// === Joke Cache Management Functions ===
+
+// Checks if cached joke is valid for today
+bool isCacheValidForToday() {
+  // Check if cache file exists
+  if (!LittleFS.exists(JOKE_CACHE_JSON)) {
+    debugLog("No cache file exists");
+    return false;
+  }
+
+  // Open and parse cache file
+  File cacheFile = LittleFS.open(JOKE_CACHE_JSON, "r");
+  if (!cacheFile) {
+    debugLog("Failed to open cache file");
+    return false;
+  }
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, cacheFile);
+  cacheFile.close();
+
+  if (error) {
+    debugLog("Failed to parse cache file: " + String(error.c_str()));
+    return false;
+  }
+
+  // Extract and validate date
+  String cachedDate = doc["date"] | "";
+  if (cachedDate.length() == 0) {
+    debugLog("Cache missing date field");
+    return false;
+  }
+
+  // Compare with current date
+  String currentDate = getCurrentDate();
+  bool isValid = (cachedDate == currentDate);
+
+  debugLog("Cache date: " + cachedDate + ", Current: " + currentDate +
+           ", Valid: " + (isValid ? "YES" : "NO"));
+
+  return isValid;
+}
+
+// Load processed joke text from cache
+String loadCachedJoke() {
+  if (!LittleFS.exists(JOKE_CACHE_JSON)) {
+    debugLog("Cache file does not exist");
+    return "";
+  }
+
+  File cacheFile = LittleFS.open(JOKE_CACHE_JSON, "r");
+  if (!cacheFile) {
+    debugLog("Failed to open cache file for reading");
+    return "";
+  }
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, cacheFile);
+  cacheFile.close();
+
+  if (error) {
+    debugLog("Failed to parse cache: " + String(error.c_str()));
+    return "";
+  }
+
+  String jokeText = doc["jokeText"] | "";
+
+  if (jokeText.length() == 0) {
+    debugLog("Cache has no joke text");
+    return "";
+  }
+
+  debugLog("Loaded cached joke: " + String(jokeText.length()) + " chars");
+  return jokeText;
+}
+
+// Save processed joke with date to cache
+bool saveCachedJoke(String date, String jokeText) {
+  JsonDocument doc;
+
+  // Build JSON structure
+  doc["date"] = date;
+  doc["timestamp"] = String(timeClient.getEpochTime());
+  doc["jokeText"] = jokeText;
+  doc["source"] = JOKE_SOURCE;
+
+  // Write to file
+  File cacheFile = LittleFS.open(JOKE_CACHE_JSON, "w");
+  if (!cacheFile) {
+    debugLog("Failed to open cache file for writing");
+    return false;
+  }
+
+  if (serializeJson(doc, cacheFile) == 0) {
+    debugLog("Failed to write cache JSON");
+    cacheFile.close();
+    return false;
+  }
+
+  cacheFile.close();
+  debugLog("Cached joke saved: " + date + ", " + String(jokeText.length()) + " chars");
+  return true;
+}
+
+// Combined fetch + process operation (runs once per day)
+bool fetchAndProcessJoke(JokeError &error) {
+  debugLog("Fetching and processing new joke...");
+
+  // Step 1: Fetch raw HTML from API
+  bool fetchSuccess = fetchJokeFromAPI(error);
+  if (!fetchSuccess) {
+    debugLog("Fetch from API failed");
+    // Error details already populated by fetchJokeFromAPI()
+    return false;
+  }
+
+  // Step 2: Process HTML to extract clean text
+  String jokeText = processJokeFromFile();
+
+  // Check for processing errors
+  if (jokeText.startsWith("Error:")) {
+    debugLog("Processing failed: " + jokeText);
+    error.errorType = "PROCESSING_FAILED";
+    error.detailedMessage = jokeText;
+    return false;
+  }
+
+  if (jokeText.length() == 0) {
+    debugLog("Processing resulted in empty joke");
+    error.errorType = "PROCESSING_FAILED";
+    error.detailedMessage = "HTML processing resulted in empty text";
+    return false;
+  }
+
+  // Step 3: Save processed joke with date to cache
+  String currentDate = getCurrentDate();
+  bool saveSuccess = saveCachedJoke(currentDate, jokeText);
+
+  if (!saveSuccess) {
+    debugLog("Failed to save processed joke to cache");
+    error.errorType = "FILE_IO_ERROR";
+    error.detailedMessage = "Cannot save joke to cache file";
+    return false;
+  }
+
+  // Step 4: Delete temp HTML file to save space
+  if (LittleFS.exists(JOKE_CACHE_FILE)) {
+    if (LittleFS.remove(JOKE_CACHE_FILE)) {
+      debugLog("Temp HTML file deleted");
+    } else {
+      debugLog("Warning: Failed to delete temp HTML file");
+    }
+  }
+
+  debugLog("Joke fetched, processed, and cached successfully");
+  return true;
+}
+
 // Function for printing jokes
 void printDailyJoke(String jokeText) {
   debugLog("Printing joke...");
@@ -626,9 +858,13 @@ void printDailyJoke(String jokeText) {
   // Small delay to ensure printer is ready for new job
   delay(500);
 
+  String date = getFormattedDateTime();
+  date = "  " + date;
+  date = date + "  ";
+
   // Print header
   setInverse(true);
-  printLine(getFormattedDateTime());
+  printLine(date);
   setInverse(false);
 
   delay(1000);
@@ -647,15 +883,13 @@ void printServerInfo() {
   debugLog("Access the form at: http://" + WiFi.localIP().toString());
   debugLog("==================");
 
-  // Also print server info on the thermal printer
-  debugLog("Printing server info on thermal printer...");
 
-  // Additional 5s delay before first print job
-  delay(5000);
+  // Additional 10s delay before first print job
+  debugLog("Wating for printer to start up...");
+  delay(10000);
 
-  //setInverse(true);
+  debugLog("Printing server info on thermal printer.");
   printLine("PRINTER SERVER READY");
-  //setInverse(false);
 
   // Delay between sections
   delay(500);
@@ -764,10 +998,11 @@ void handle404(AsyncWebServerRequest *request) {
 void handlePrintJoke(AsyncWebServerRequest *request) {
   debugLog("Joke print requested via web interface");
 
-  // Queue the joke for fetching and printing in the main loop (async-safe)
-  currentJoke.shouldFetchAndPrint = true;
+  // Queue the joke for printing in the main loop (async-safe)
+  currentJoke.shouldPrint = true;
+  currentJoke.isScheduled = false; // Mark as manual
 
-  request->send(200, "text/plain", "Joke will be fetched and printed!");
+  request->send(200, "text/plain", "Joke will be printed!");
 }
 
 // Handler for WiFi info endpoint
@@ -789,10 +1024,27 @@ void handleForgetWifi(AsyncWebServerRequest *request) {
 
   request->send(200, "text/plain", "Forgetting WiFi and restarting...");
 
-  // Delete the config file
+  // Clear WiFi credentials while preserving schedule settings
   if (LittleFS.exists("/config.json")) {
-    LittleFS.remove("/config.json");
-    debugLog("WiFi credentials deleted");
+    // Load existing config to preserve non-WiFi fields
+    JsonDocument doc;
+    File configFile = LittleFS.open("/config.json", "r");
+    if (configFile) {
+      deserializeJson(doc, configFile);
+      configFile.close();
+    }
+
+    // Clear only WiFi credential fields
+    doc["ssid"] = "";
+    doc["password"] = "";
+
+    // Write back to file
+    configFile = LittleFS.open("/config.json", "w");
+    if (configFile) {
+      serializeJson(doc, configFile);
+      configFile.close();
+      debugLog("WiFi credentials cleared (schedule settings preserved)");
+    }
   }
 
   // Restart the device after a short delay
@@ -881,57 +1133,83 @@ void mainProgramLoop() {
   // Update time client
   timeClient.update();
 
-  // Check if we have a new receipt to print
-  if (currentReceipt.hasData) {
-    printReceipt();
-    currentReceipt.hasData = false; // Reset flag
-  }
-
-  // Check scheduled printing (before manual joke check)
+  // === PHASE 1: CHECK SCHEDULED PRINT ===
   if (shouldPrintScheduledJoke()) {
     debugLog("Scheduled joke print triggered at " + getCurrentTime());
-    currentJoke.shouldFetchAndPrint = true;
+    currentJoke.shouldPrint = true;
     currentJoke.isScheduled = true;
   }
 
-  // Check if a joke print was requested
-  if (currentJoke.shouldFetchAndPrint) {
-    // Step 1: Fetch joke from API and save to filesystem
-    debugLog("Starting joke fetch...");
-    bool fetchSuccess = fetchJokeFromAPI();
+  // === PHASE 2: ENSURE CACHE IS READY ===
+  if (currentJoke.shouldPrint && !isCacheValidForToday()) {
+    debugLog("Cache invalid or missing, fetching today's joke");
 
-    if (fetchSuccess) {
-      // HTTP connection is now closed, memory freed
-      currentJoke.shouldFetchAndPrint = false;
-      currentJoke.readyToPrint = true;
-    } else {
-      debugLog("ERROR: Failed to fetch joke");
-      printDailyJoke("Error: Could not fetch joke from server");
-      currentJoke.shouldFetchAndPrint = false;
-      currentJoke.readyToPrint = false;
+    int tries = 0;
+    bool fetchSuccess = false;
+    JokeError lastError = {-1, true, "", 0, ""};  // Initialize error struct
+
+    while (tries < 10 && !fetchSuccess) {
+      tries++;
+      debugLog("Fetch attempt " + String(tries) + "/10");
+
+      // Check internet connectivity BEFORE retry (not on first attempt)
+      if (tries > 1) {
+        lastError.hasInternetConnectivity = verifyInternetConnectivity();
+        if (!lastError.hasInternetConnectivity) {
+          debugLog("WARNING: No internet connectivity detected (google.com unreachable)");
+        }
+      }
+
+      // Attempt to fetch
+      lastError.attemptNumber = tries;
+      fetchSuccess = fetchAndProcessJoke(lastError);
+
+      if (!fetchSuccess && tries < 10) {
+        debugLog("Fetch failed, retrying in 10s");
+        delay(10000);
+        yield(); // Allow ESP to handle WiFi, etc.
+      }
+    }
+
+    if (!fetchSuccess) {
+      debugLog("ERROR: Failed to fetch joke after 10 attempts");
+      // Build detailed error message for thermal printer
+      String errorMessage = buildErrorMessage(lastError);
+      printDailyJoke(errorMessage);
+      currentJoke.shouldPrint = false;
+      currentJoke.isScheduled = false;
+      return; // Exit early, skip printing
     }
   }
 
-  // Check if joke is ready to process and print
-  if (currentJoke.readyToPrint) {
-    // Step 2: Process joke from file (parse HTML, decode entities, etc.)
-    debugLog("Processing joke from cache...");
-    String jokeText = processJokeFromFile();
+  // === PHASE 3: PRINT JOKE ===
+  if (currentJoke.shouldPrint) {
+    String jokeText = loadCachedJoke();
 
-    // Step 3: Print the joke
-    printDailyJoke(jokeText);
+    if (jokeText.length() > 0) {
+      printDailyJoke(jokeText);
 
-    // Track scheduled prints (update date only for automatic prints)
-    if (currentJoke.isScheduled) {
-      String currentDate = getCurrentDate();
-      updateLastPrintDate(currentDate);
-      scheduleState.lastJokePrintDate = currentDate;
-      debugLog("Updated lastJokePrintDate: " + currentDate);
-      currentJoke.isScheduled = false;
+      // Update schedule tracking for scheduled prints
+      if (currentJoke.isScheduled) {
+        String currentDate = getCurrentDate();
+        updateLastPrintDate(currentDate);
+        scheduleState.lastJokePrintDate = currentDate;
+        debugLog("Updated lastJokePrintDate: " + currentDate);
+      }
+    } else {
+      debugLog("ERROR: Failed to load cached joke");
+      printDailyJoke("Error: Cache corrupted or empty");
     }
 
-    // Reset flag
-    currentJoke.readyToPrint = false;
+    // Reset flags
+    currentJoke.shouldPrint = false;
+    currentJoke.isScheduled = false;
+  }
+
+  // === PHASE 4: RECEIPT PRINTING ===
+  if (currentReceipt.hasData) {
+    printReceipt();
+    currentReceipt.hasData = false; // Reset flag
   }
 
   delay(10); // Small delay to prevent excessive CPU usage

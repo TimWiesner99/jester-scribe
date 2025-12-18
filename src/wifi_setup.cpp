@@ -21,6 +21,17 @@ bool wifiConnected = false;
 // Saves WiFi credentials to LittleFS as JSON
 bool saveCredentials(String ssid, String password) {
     JsonDocument doc;
+
+    // Load existing config to preserve schedule fields
+    if (LittleFS.exists(CONFIG_FILE)) {
+        File configFile = LittleFS.open(CONFIG_FILE, "r");
+        if (configFile) {
+            deserializeJson(doc, configFile);
+            configFile.close();
+        }
+    }
+
+    // Update WiFi credentials
     doc["ssid"] = ssid;
     doc["password"] = password;
 
@@ -100,17 +111,38 @@ bool verifyInternetConnectivity() {
     }
 }
 
-// Deletes the saved WiFi credentials file from LittleFS
+// Clears the saved WiFi credentials from LittleFS while preserving other config fields
 // This forces the device to launch the captive portal on next connection attempt
 void forgetCredentials() {
     if (LittleFS.exists(CONFIG_FILE)) {
-        if (LittleFS.remove(CONFIG_FILE)) {
-            Serial.println("Saved WiFi credentials have been deleted");
-        } else {
-            Serial.println("Warning: Failed to delete credentials file");
+        // Load existing config to preserve non-WiFi fields (schedule settings, etc.)
+        JsonDocument doc;
+        File configFile = LittleFS.open(CONFIG_FILE, "r");
+        if (configFile) {
+            deserializeJson(doc, configFile);
+            configFile.close();
         }
+
+        // Clear only WiFi credential fields
+        doc["ssid"] = "";
+        doc["password"] = "";
+
+        // Write back to file
+        configFile = LittleFS.open(CONFIG_FILE, "w");
+        if (!configFile) {
+            Serial.println("Warning: Failed to open config file for writing");
+            return;
+        }
+
+        if (serializeJson(doc, configFile) == 0) {
+            Serial.println("Warning: Failed to write updated config file");
+        } else {
+            Serial.println("WiFi credentials cleared (schedule settings preserved)");
+        }
+
+        configFile.close();
     } else {
-        Serial.println("No credentials file to delete");
+        Serial.println("No credentials file to update");
     }
 }
 

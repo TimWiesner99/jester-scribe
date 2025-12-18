@@ -13,4 +13,7 @@ bool wifiSetupConnect();
 // Check if WiFi is currently connected
 bool isWifiConnected();
 
+// Verify internet connectivity by attempting to resolve google.com via DNS
+bool verifyInternetConnectivity();
+
 #endif
